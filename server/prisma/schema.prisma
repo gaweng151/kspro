@@ -1,0 +1,479 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// =======================
+// ENUMS
+// =======================
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum RoomStatus {
+  AVAILABLE
+  RESERVED
+  OCCUPIED
+  MAINTENANCE
+}
+
+enum SessionStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  QRIS
+  TRANSFER
+  CARD
+  OTHER
+}
+
+enum PricingType {
+  REGULAR
+  PROMO
+  WEEKEND
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+}
+
+enum TransactionType {
+  SESSION
+  ORDER
+  OTHER
+}
+
+enum CompanionStatus {
+  AVAILABLE
+  ASSIGNED
+  INACTIVE
+}
+
+enum ChargeCategory {
+  TAX
+  SERVICE
+}
+
+// =======================
+// USER
+// =======================
+
+model User {
+  id       Int     @id @default(autoincrement())
+  username String  @unique @db.VarChar(50)
+  password String  @db.VarChar(255)
+  token    String? @db.VarChar(255)
+
+  role     Role    @default(STAFF)
+  isActive Boolean @default(true)
+
+  sessions     Session[]     @relation("SessionCashier")
+  transactions Transaction[] @relation("TransactionCashier")
+  orders       Order[]       @relation("OrderCashier")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =======================
+// ROOM
+// =======================
+
+model Room {
+  id     Int        @id @default(autoincrement())
+  name   String     @unique @db.VarChar(100)
+  type   String?    @db.VarChar(50)
+  status RoomStatus @default(AVAILABLE)
+
+  pricings RoomPricing[]
+  sessions Session[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =======================
+// ROOM PRICING
+// =======================
+
+model RoomPricing {
+  id     Int  @id @default(autoincrement())
+  roomId Int
+  room   Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+
+  type      PricingType
+  startTime String      @db.VarChar(5) // HH:mm
+  endTime   String      @db.VarChar(5) // HH:mm
+
+  // Harga per jam
+  price Decimal @db.Decimal(12, 2)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roomId, type, isActive])
+}
+
+// =======================
+// PRODUCT
+// =======================
+
+model Product {
+  id   Int    @id @default(autoincrement())
+  name String @unique @db.VarChar(100)
+
+  capitalPrice Decimal @db.Decimal(12, 2)
+  price        Decimal @db.Decimal(12, 2)
+
+  trackStock Boolean @default(true)
+  stock      Int     @default(0)
+
+  useTax     Boolean @default(true)
+  useService Boolean @default(true)
+
+  packageItems PackageItem[]
+  orderItems   OrderItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+}
+
+// =======================
+// PACKAGE
+// =======================
+
+model Package {
+  id             Int    @id @default(autoincrement())
+  name           String @db.VarChar(100)
+  durationMinute Int
+
+  price Decimal @db.Decimal(12, 2)
+
+  isActive Boolean @default(true)
+
+  items    PackageItem[]
+  sessions Session[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// =======================
+// PACKAGE ITEM
+// =======================
+
+model PackageItem {
+  id Int @id @default(autoincrement())
+
+  packageId Int
+  productId Int
+
+  package Package @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  quantity Int @default(1)
+
+  @@unique([packageId, productId])
+  @@index([productId])
+}
+
+// =======================
+// COMPANION
+// Pendamping karaoke
+// =======================
+
+model Companion {
+  id Int @id @default(autoincrement())
+
+  name  String  @db.VarChar(100)
+  phone String? @db.VarChar(20)
+
+  status CompanionStatus @default(AVAILABLE)
+
+  // Tarif pendamping per jam
+  priceHour Decimal @default(0) @db.Decimal(12, 2)
+
+  isActive Boolean @default(true)
+
+  assignments SessionCompanion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, isActive])
+}
+
+// =======================
+// SESSION
+// Pemakaian room karaoke
+// =======================
+
+model Session {
+  id Int @id @default(autoincrement())
+
+  roomId Int
+  room   Room @relation(fields: [roomId], references: [id], onDelete: Restrict)
+
+  cashierId Int
+  cashier   User @relation("SessionCashier", fields: [cashierId], references: [id], onDelete: Restrict)
+
+  packageId Int?
+  package   Package? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+
+  status SessionStatus @default(ACTIVE)
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  // Snapshot harga saat session dimulai
+  priceHour Decimal @db.Decimal(12, 2)
+
+  // Snapshot paket
+  packagePrice   Decimal? @db.Decimal(12, 2)
+  durationMinute Int?
+
+  // Total biaya room dan paket sebelum diskon
+  subtotal Decimal @default(0) @db.Decimal(12, 2)
+
+  // Diskon nominal
+  discount Decimal @default(0) @db.Decimal(12, 2)
+
+  // Charge pajak dan service
+  taxAmount     Decimal @default(0) @db.Decimal(12, 2)
+  serviceAmount Decimal @default(0) @db.Decimal(12, 2)
+
+  // Total tagihan session
+  grandTotal Decimal @default(0) @db.Decimal(12, 2)
+
+  paymentStatus PaymentStatus @default(UNPAID)
+
+  orders       Order[]
+  transactions Transaction[]
+  companions   SessionCompanion[]
+  charges      SessionCharge[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roomId, status])
+  @@index([cashierId])
+  @@index([status])
+  @@index([startedAt])
+  @@index([paymentStatus])
+}
+
+// =======================
+// SESSION COMPANION
+// Relasi session dengan pendamping
+// =======================
+
+model SessionCompanion {
+  id Int @id @default(autoincrement())
+
+  sessionId   Int
+  companionId Int
+
+  session   Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  companion Companion @relation(fields: [companionId], references: [id], onDelete: Restrict)
+
+  startedAt DateTime  @default(now())
+  endedAt   DateTime?
+
+  // Snapshot tarif pendamping per jam
+  priceHour Decimal @db.Decimal(12, 2)
+
+  // Total biaya pendamping
+  total Decimal @default(0) @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sessionId])
+  @@index([companionId, endedAt])
+}
+
+// =======================
+// ORDER
+// Pesanan produk per session
+// =======================
+
+model Order {
+  id Int @id @default(autoincrement())
+
+  // Nomor order untuk kasir
+  orderNumber String @unique @db.VarChar(50)
+
+  sessionId Int
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  cashierId Int
+  cashier   User @relation("OrderCashier", fields: [cashierId], references: [id], onDelete: Restrict)
+
+  status OrderStatus @default(PENDING)
+
+  subtotal Decimal @default(0) @db.Decimal(12, 2)
+  discount Decimal @default(0) @db.Decimal(12, 2)
+
+  taxAmount     Decimal @default(0) @db.Decimal(12, 2)
+  serviceAmount Decimal @default(0) @db.Decimal(12, 2)
+
+  total Decimal @default(0) @db.Decimal(12, 2)
+
+  items        OrderItem[]
+  transactions Transaction[]
+
+  note String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sessionId, status])
+  @@index([cashierId])
+  @@index([createdAt])
+}
+
+// =======================
+// ORDER ITEM
+// Detail produk yang dipesan
+// =======================
+
+model OrderItem {
+  id Int @id @default(autoincrement())
+
+  orderId   Int
+  productId Int
+
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  // Snapshot produk saat dipesan
+  productName String  @db.VarChar(100)
+  quantity    Int     @default(1)
+  price       Decimal @db.Decimal(12, 2)
+
+  // Subtotal item
+  subtotal Decimal @db.Decimal(12, 2)
+
+  useTax     Boolean @default(true)
+  useService Boolean @default(true)
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// =======================
+// TRANSACTION
+// Pembayaran session dan order
+// =======================
+
+model Transaction {
+  id Int @id @default(autoincrement())
+
+  transactionNumber String @unique
+
+  type TransactionType @default(SESSION)
+
+  sessionId Int
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+
+  // Opsional: pembayaran khusus order
+  orderId Int?
+  order   Order? @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  cashierId Int
+  cashier   User @relation("TransactionCashier", fields: [cashierId], references: [id], onDelete: Restrict)
+
+  amount Decimal @db.Decimal(12, 2)
+
+  method PaymentMethod @default(CASH)
+  status PaymentStatus @default(PAID)
+
+  reference String? @db.VarChar(255)
+  note      String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sessionId, status])
+  @@index([orderId])
+  @@index([cashierId])
+  @@index([createdAt])
+}
+
+// =======================
+// CHARGE SETTING
+// Pajak dan service persentase
+// =======================
+
+model ChargeSetting {
+  id Int @id @default(autoincrement())
+
+  name     String         @db.VarChar(100)
+  category ChargeCategory
+
+  // 10.00 berarti 10%
+  value Decimal @db.Decimal(7, 4)
+
+  afterDiscount Boolean @default(true)
+  isActive      Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category, isActive])
+}
+
+// =======================
+// SESSION CHARGE
+// Snapshot charge session
+// =======================
+
+model SessionCharge {
+  id Int @id @default(autoincrement())
+
+  sessionId Int
+  session   Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  name     String         @db.VarChar(100)
+  category ChargeCategory
+
+  // Persentase saat transaksi dibuat
+  value Decimal @db.Decimal(7, 4)
+
+  baseAmount Decimal @db.Decimal(12, 2)
+  amount     Decimal @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([sessionId])
+}
